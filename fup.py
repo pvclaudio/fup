@@ -28,6 +28,7 @@ from datetime import timedelta
 import matplotlib.pyplot as plt
 from docx import Document
 from docx.shared import Pt
+from pandas import Timestamp
 
 st.set_page_config(layout = 'wide')
 
@@ -39,6 +40,8 @@ caminho_csv = "followups.csv"
 admin_users = ["cvieira", "amendonca", "mathayde"]
 cadastro_users = ["cvieira", "amendonca", "mathayde"]
 chat_users = ["cvieira", "amendonca", "mathayde","bromanelli","ysouza"]
+
+hoje = Timestamp.today().normalize()
 
 def enviar_email_gmail(destinatario, assunto, corpo_html):
     try:
@@ -75,63 +78,167 @@ def conectar_drive():
 def upload_para_drive():
     try:
         drive = conectar_drive()
-        arquivo = drive.CreateFile({'title': 'followups.csv'})
+
+        # Verifica ou cria pasta principal 'FUP'
+        pastas_fup = drive.ListFile({
+            'q': "title = 'FUP' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        }).GetList()
+
+        if pastas_fup:
+            pasta_fup = pastas_fup[0]
+        else:
+            pasta_fup = drive.CreateFile({
+                'title': 'FUP',
+                'mimeType': 'application/vnd.google-apps.folder'
+            })
+            pasta_fup.Upload()
+
+        # Verifica ou cria subpasta 'backup' dentro da pasta 'FUP'
+        backups = drive.ListFile({
+            'q': f"'{pasta_fup['id']}' in parents and title = 'backup' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        }).GetList()
+
+        if backups:
+            pasta_backup = backups[0]
+        else:
+            pasta_backup = drive.CreateFile({
+                'title': 'backup',
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [{'id': pasta_fup['id']}]
+            })
+            pasta_backup.Upload()
+
+        # Cria (ou substitui) o arquivo followups.csv dentro de 'FUP'
+        arquivos_existentes = drive.ListFile({
+            'q': f"'{pasta_fup['id']}' in parents and title = 'followups.csv' and trashed = false"
+        }).GetList()
+
+        if arquivos_existentes:
+            arquivo = arquivos_existentes[0]
+        else:
+            arquivo = drive.CreateFile({
+                'title': 'followups.csv',
+                'parents': [{'id': pasta_fup['id']}]
+            })
+
         arquivo.SetContentFile(caminho_csv)
         arquivo.Upload()
-        st.info("📤 Arquivo 'followups.csv' enviado ao Google Drive com sucesso.")
+
+        # Cria cópia com timestamp em /FUP/backup
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = drive.CreateFile({
+            'title': f'followups_backup_{timestamp}.csv',
+            'parents': [{'id': pasta_backup['id']}]
+        })
+        backup_file.SetContentFile(caminho_csv)
+        backup_file.Upload()
+
+        st.info("📤 Arquivo 'followups.csv' atualizado na pasta FUP e backup gerado com sucesso.")
+
     except Exception as e:
         st.warning(f"Erro ao enviar para o Drive: {e}")
 
 def upload_evidencias_para_drive(idx, arquivos, observacao):
     try:
         drive = conectar_drive()
-        pasta_principal = None
 
-        # Procura ou cria a pasta principal "evidencias"
-        lista = drive.ListFile({'q': "title='evidencias' and mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
+        # Garante que a pasta "FUP" exista
+        pastas_fup = drive.ListFile({
+            'q': "title = 'FUP' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        }).GetList()
+
+        if pastas_fup:
+            pasta_fup = pastas_fup[0]
+        else:
+            pasta_fup = drive.CreateFile({
+                'title': 'FUP',
+                'mimeType': 'application/vnd.google-apps.folder'
+            })
+            pasta_fup.Upload()
+
+        # Verifica ou cria a subpasta "evidencias" dentro de "FUP"
+        lista = drive.ListFile({
+            'q': f"'{pasta_fup['id']}' in parents and title = 'evidencias' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        }).GetList()
+
         if lista:
             pasta_principal = lista[0]
         else:
-            pasta_principal = drive.CreateFile({'title': 'evidencias', 'mimeType': 'application/vnd.google-apps.folder'})
+            pasta_principal = drive.CreateFile({
+                'title': 'evidencias',
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [{'id': pasta_fup['id']}]
+            })
             pasta_principal.Upload()
 
-        # Cria subpasta indice_x
+        # Cria ou encontra a subpasta indice_x
         subpasta_nome = f"indice_{idx}"
-        subpastas = drive.ListFile({'q': f"'{pasta_principal['id']}' in parents and title='{subpasta_nome}' and mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
+        subpastas = drive.ListFile({
+            'q': f"'{pasta_principal['id']}' in parents and title='{subpasta_nome}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        }).GetList()
+
         if subpastas:
             subpasta = subpastas[0]
         else:
-            subpasta = drive.CreateFile({'title': subpasta_nome, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [{'id': pasta_principal['id']}]})
+            subpasta = drive.CreateFile({
+                'title': subpasta_nome,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [{'id': pasta_principal['id']}]
+            })
             subpasta.Upload()
 
-        # Envia arquivos
+        # 📎 Upload dos arquivos
         for arq in arquivos:
-            arquivo_drive = drive.CreateFile({'title': arq.name, 'parents': [{'id': subpasta['id']}]})
-            
+            arquivo_drive = drive.CreateFile({
+                'title': arq.name,
+                'parents': [{'id': subpasta['id']}]
+            })
             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                 tmp_file.write(arq.getvalue())
                 tmp_file.flush()
                 arquivo_drive.SetContentFile(tmp_file.name)
                 arquivo_drive.Upload()
 
-        # Observação
+        # 📝 Observação
         if observacao.strip():
-            obs_file = drive.CreateFile({'title': 'observacao.txt', 'parents': [{'id': subpasta['id']}]})
+            obs_file = drive.CreateFile({
+                'title': 'observacao.txt',
+                'parents': [{'id': subpasta['id']}]
+            })
             obs_file.SetContentString(observacao.strip())
             obs_file.Upload()
 
         st.success("✅ Evidências enviadas ao Google Drive com sucesso.")
         return True
+
     except Exception as e:
         st.error(f"Erro ao enviar evidências para o Drive: {e}")
         return False
         
 def carregar_followups():
     drive = conectar_drive()
-    arquivos = drive.ListFile({'q': "title = 'followups.csv' and trashed=false"}).GetList()
+
+    # Garante que a pasta FUP exista
+    pastas_fup = drive.ListFile({
+        'q': "title = 'FUP' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    }).GetList()
+
+    if pastas_fup:
+        pasta_fup = pastas_fup[0]
+    else:
+        pasta_fup = drive.CreateFile({
+            'title': 'FUP',
+            'mimeType': 'application/vnd.google-apps.folder'
+        })
+        pasta_fup.Upload()
+
+    # Busca o followups.csv dentro da FUP
+    arquivos = drive.ListFile({
+        'q': f"'{pasta_fup['id']}' in parents and title = 'followups.csv' and trashed=false"
+    }).GetList()
 
     colunas = [
-        "Titulo", "Ambiente", "Ano", "Auditoria", "Risco",
+        "Titulo", "Ambiente", "Ano", "Auditoria", "Apontamento", "Risco",
         "Plano de Acao", "Responsavel", "Usuario", "E-mail",
         "Prazo", "Data de Conclusão", "Status", "Avaliação FUP", "Observação"
     ]
@@ -140,7 +247,11 @@ def carregar_followups():
         df_vazio = pd.DataFrame(columns=colunas)
         caminho_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv").name
         df_vazio.to_csv(caminho_temp, sep=";", index=False, encoding="utf-8-sig")
-        novo_arquivo = drive.CreateFile({'title': 'followups.csv'})
+
+        novo_arquivo = drive.CreateFile({
+            'title': 'followups.csv',
+            'parents': [{'id': pasta_fup['id']}]
+        })
         novo_arquivo.SetContentFile(caminho_temp)
         novo_arquivo.Upload()
         return df_vazio
@@ -243,10 +354,17 @@ if menu == "Dashboard":
         drive = conectar_drive()
     
         # Procura arquivo chamado 'followups.csv'
-        arquivos = drive.ListFile({
-            'q': "title = 'followups.csv' and trashed=false"
+        pastas_fup = drive.ListFile({
+            'q': "title = 'FUP' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         }).GetList()
-    
+        if not pastas_fup:
+            st.warning("Pasta 'FUP' não encontrada no Drive.")
+            st.stop()
+        
+        arquivos = drive.ListFile({
+            'q': f"'{pastas_fup[0]['id']}' in parents and title = 'followups.csv' and trashed = false"
+        }).GetList()
+
         if not arquivos:
             st.warning("Arquivo followups.csv não encontrado no Drive.")
             st.stop()
@@ -272,7 +390,25 @@ if menu == "Dashboard":
         df["Prazo"] = pd.to_datetime(df["Prazo"], format="mixed", errors="coerce")
         df["Ano"] = df["Ano"].astype(str)
         df["Status"] = df["Status"].fillna("Não informado")
-    
+
+        # --- Filtros principais ---
+        filtro_vencidos = st.radio(
+        label='Selecione os status desejados:',
+        options=['Todos', 'No Prazo', 'Vencidos'],
+        key='filtro_vencidos'
+    )
+        
+        lista_auditorias = sorted(df['Auditoria'].unique().tolist()) + ['Todas']
+        filtro_auditoria = st.multiselect('Selecione as auditorias: ', lista_auditorias, default='Todas')
+        
+        if filtro_vencidos == 'Vencidos':
+            df = df[df['Prazo']< hoje]
+        elif filtro_vencidos == 'No Prazo':
+            df = df[df['Prazo']>= hoje]
+
+        if 'Todas' not in lista_auditorias:
+            df = df[df['Auditoria'].isin(filtro_auditoria)]
+            
         # --- KPIs principais ---
         total = len(df)
         concluidos = (df["Status"] == "Concluído").sum()
@@ -369,6 +505,9 @@ elif menu == "Meus Follow-ups":
         anos = ["Todos"] + sorted(df["Ano"].dropna().unique().tolist())
         ano_selecionado = st.sidebar.selectbox("Ano", anos)
 
+        vencimento = ["Todos", "No Prazo", "Vencido"]
+        vencimento_selecionado = st.sidebar.selectbox("Tipo de Vencimento", vencimento)
+
         prazo_inicial, prazo_final = st.sidebar.date_input(
             "Intervalo de Prazo",
             [df["Prazo"].min().date(), df["Prazo"].max().date()]
@@ -385,6 +524,11 @@ elif menu == "Meus Follow-ups":
         
         if ano_selecionado != "Todos":
             df = df[df["Ano"] == ano_selecionado]
+
+        if vencimento_selecionado == 'Vencido':
+            df = df[df['Prazo']< hoje]
+        elif vencimento_selecionado == 'No Prazo':
+            df = df[df['Prazo']>= hoje]
 
         df = df[(df["Prazo"].dt.date >= prazo_inicial) & (df["Prazo"].dt.date <= prazo_final)]
         df = df.sort_values(by="Prazo")
@@ -433,8 +577,7 @@ elif menu == "Meus Follow-ups":
                     arquivos = drive.ListFile({'q': "title = 'followups.csv' and trashed=false"}).GetList()
                     if arquivos:
                         arquivo = arquivos[0]
-                        arquivo.SetContentFile(caminho_csv)
-                        arquivo.Upload()
+                        upload_para_drive()
                     st.info("📤 Arquivo 'followups.csv' atualizado no Drive.")
                 except Exception as e:
                     st.warning(f"Erro ao enviar para o Drive: {e}")
@@ -452,8 +595,7 @@ elif menu == "Meus Follow-ups":
                         arquivos = drive.ListFile({'q': "title = 'followups.csv' and trashed=false"}).GetList()
                         if arquivos:
                             arquivo = arquivos[0]
-                            arquivo.SetContentFile(caminho_csv)
-                            arquivo.Upload()
+                            upload_para_drive()
                         st.info("📤 Arquivo 'followups.csv' atualizado no Google Drive.")
                     except Exception as e:
                         st.warning(f"Erro ao enviar para o Drive: {e}")
@@ -488,6 +630,7 @@ elif menu == "Cadastrar Follow-up":
             ambiente = st.text_input("Ambiente")
             ano = st.selectbox("Ano", list(range(2020, date.today().year + 2)))
             auditoria = st.text_input("Auditoria")
+            apontamento = st.text_input("Apontamento")
             risco = st.selectbox("Risco", ["Baixo", "Médio", "Alto"])
             plano = st.text_area("Plano de Ação")
             responsavel = st.text_input("Responsável")
@@ -507,6 +650,7 @@ elif menu == "Cadastrar Follow-up":
                 "Ambiente": ambiente,
                 "Ano": ano,
                 "Auditoria": auditoria,
+                "Apontamento": apontamento,
                 "Risco": risco,
                 "Plano de Acao": plano,
                 "Responsavel": responsavel,
@@ -539,8 +683,7 @@ elif menu == "Cadastrar Follow-up":
                 df = pd.concat([df, pd.DataFrame([novo])], ignore_index=True)
                 df.to_csv(caminho_csv, sep=";", index=False, encoding="utf-8-sig")
     
-                arquivo.SetContentFile(caminho_csv)
-                arquivo.Upload()
+                upload_para_drive()
     
                 st.success("✅ Follow-up salvo e sincronizado com o Drive!")
     
@@ -550,6 +693,7 @@ elif menu == "Cadastrar Follow-up":
                 <ul>
                     <li><b>Título:</b> {titulo}</li>
                     <li><b>Auditoria:</b> {auditoria}</li>
+                    <li><b>Apontamento:</b> {apontamento}</li>
                     <li><b>Plano de Acao:</b> {plano}</li>
                     <li><b>Prazo:</b> {prazo.strftime('%d/%m/%Y')}</li>
                     <li><b>Status:</b> {status}</li>
@@ -610,6 +754,7 @@ elif menu == "Enviar Evidências":
 
         st.markdown(f"""
         🔎 **Título:** {linha['Titulo']}  
+        🚩 **Apontamento:** {linha['Apontamento']}  
         📅 **Prazo:** {linha['Prazo']}  
         👤 **Responsável:** {linha['Responsavel']}  
         📝 **Plano de Ação:** {linha['Plano de Acao']}
@@ -617,7 +762,7 @@ elif menu == "Enviar Evidências":
 
         arquivos = st.file_uploader(
             "Anexe arquivos de evidência",
-            type=["pdf", "png", "jpg", "jpeg", "zip"],
+            type=["pdf", "png", "jpg", "jpeg", "zip", "doc", "docx", "eml", "msg"],
             accept_multiple_files=True
         )
         observacao = st.text_area("Observações (opcional)")
@@ -659,6 +804,7 @@ elif menu == "Enviar Evidências":
                 <ul>
                     <li><b>Índice:</b> {idx}</li>
                     <li><b>Título:</b> {linha['Titulo']}</li>
+                    <li><b>Apontamento:</b> {linha['Apontamento']}</li>
                     <li><b>Responsável:</b> {linha['Responsavel']}</li>
                     <li><b>Arquivos:</b> {"; ".join([arq.name for arq in arquivos])}</li>
                     <li><b>Data:</b> {datetime.now().strftime("%d/%m/%Y %H:%M")}</li>
@@ -666,7 +812,7 @@ elif menu == "Enviar Evidências":
                 <p>Evidências armazenadas no Drive (pasta: <b>evidencias/indice_{idx}</b>).</p>
                 """
 
-                destinatarios_evidencias = ["cvieira@prio3.com.br","mathayde@prio3.com.br"]
+                destinatarios_evidencias = ["cvieira@prio3.com.br","mathayde@prio3.com.br","amendonca@prio3.com.br"]
                 
                 sucesso_envio = enviar_email_gmail(
                     destinatario=destinatarios_evidencias,
