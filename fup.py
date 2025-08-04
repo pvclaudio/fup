@@ -1261,23 +1261,23 @@ def enviar_emails_followups_a_vencer():
     df["Prazo"] = pd.to_datetime(df["Prazo"], errors="coerce")
 
     hoje = pd.Timestamp.today().normalize()
-    limite = hoje + timedelta(days=30)
 
+    # Filtra follow-ups ainda não concluídos com prazo futuro
     df_a_vencer = df[
         (df["Status"].str.lower() != "concluído") &
-        (df["Prazo"] >= hoje) &
-        (df["Prazo"] <= limite)
-    ]
+        (df["Prazo"] >= hoje)
+    ].copy()
 
     if df_a_vencer.empty:
-        st.info("✅ Nenhum follow-up com prazo a vencer em 30 dias.")
+        st.info("✅ Nenhum follow-up com prazo futuro identificado.")
         return
+
+    # Cálculo de dias restantes até o prazo
+    df_a_vencer["Dias Restantes"] = (df_a_vencer["Prazo"] - hoje).dt.days
 
     responsaveis = df_a_vencer["E-mail"].dropna().unique().tolist()
     lista_cc = ["cvieira@prio3.com.br", "mathayde@prio3.com.br", "amendonca@prio3.com.br"]
-
     email_user = os.getenv("EMAIL_USER")
-    email_pass = os.getenv("EMAIL_PASS")
 
     for email in responsaveis:
         df_resp = df_a_vencer[df_a_vencer["E-mail"] == email]
@@ -1286,19 +1286,25 @@ def enviar_emails_followups_a_vencer():
 
         corpo_html = """
         <p>Olá,</p>
-        <p>Você possui os seguintes follow-ups com prazo a vencer em até 30 dias:</p>
+        <p>Você possui os seguintes follow-ups com prazo a vencer:</p>
         <table border='1' cellpadding='4' cellspacing='0'>
-            <tr><th>Título</th><th>Auditoria</th><th>Plano de Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th></tr>
+            <tr>
+                <th>Título</th><th>Auditoria</th><th>Plano de Ação</th>
+                <th>Responsável</th><th>Prazo</th><th>Em</th><th>Status</th>
+            </tr>
         """
 
         for _, row in df_resp.iterrows():
+            prazo_str = row["Prazo"].strftime("%d/%m/%Y")
+            dias = row["Dias Restantes"]
             corpo_html += f"""
             <tr>
                 <td>{row['Titulo']}</td>
                 <td>{row['Auditoria']}</td>
                 <td>{row['Plano de Acao']}</td>
                 <td>{row['Responsavel']}</td>
-                <td>{row['Prazo'].date()}</td>
+                <td>{prazo_str}</td>
+                <td>em {dias} dia{'s' if dias != 1 else ''}</td>
                 <td>{row['Status']}</td>
             </tr>
             """
@@ -1306,7 +1312,6 @@ def enviar_emails_followups_a_vencer():
         corpo_html += """
         </table>
         <p>Por favor, antecipe ações necessárias e atualize o status no sistema.</p>
-        <p>Acesse o aplicativo para mais detalhes:</p>
         <p><a href='http://10.40.12.13:8502/' target='_blank'>🔗 Acessar Follow-ups da Auditoria Interna</a></p>
         <br>
         <p>Atenciosamente,<br>Time de Auditoria Interna.</p>
@@ -1317,12 +1322,11 @@ def enviar_emails_followups_a_vencer():
             msg["From"] = email_user
             msg["To"] = email
             msg["Cc"] = ", ".join(lista_cc)
-            msg["Subject"] = "⏳ Follow-ups próximos do vencimento"
+            msg["Subject"] = "⏳ Follow-ups a vencer - Auditoria Interna"
 
             msg.attach(MIMEText(corpo_html, "html"))
-            
             todos_destinatarios = [email] + lista_cc
-            
+
             with smtplib.SMTP("10.40.0.106", 587) as servidor:
                 servidor.sendmail(email_user, todos_destinatarios, msg.as_string())
 
@@ -1330,6 +1334,7 @@ def enviar_emails_followups_a_vencer():
 
         except Exception as e:
             st.warning(f"Erro ao enviar para {email}: {e}")
+
 
 if st.session_state.username in admin_users:
     if st.sidebar.button("📅 Enviar lembrete de follow-ups a vencer"):
