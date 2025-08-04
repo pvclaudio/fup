@@ -1,11 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Aug  4 07:43:41 2025
-
-@author: cvieira
-"""
-
-
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
@@ -938,7 +930,19 @@ elif menu == "Visualizar Evidências":
                 observacao = obs_arqs[0].GetContentString()
 
             st.markdown("**📎 Evidência:**")
-            st.markdown(f"[{nome}]({arq['alternateLink']})", unsafe_allow_html=True)
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                arq.GetContentFile(tmp_file.name)
+                with open(tmp_file.name, "rb") as f:
+                    file_bytes = f.read()
+            
+            st.download_button(
+                label=f"Baixar evidência: {nome}",
+                data=file_bytes,
+                file_name=nome,
+                mime="application/octet-stream",
+                key=f"download_{count}"
+            )
+
             st.markdown("**📝 Observação:**")
             nova_obs = st.text_area(f"Editar observação {count}", value=observacao, key=f"obs_edit_{count}")
 
