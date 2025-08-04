@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Aug  4 07:43:41 2025
+
+@author: cvieira
+"""
+
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
@@ -18,19 +26,22 @@ import openai
 import json
 import httpx
 from sentence_transformers import SentenceTransformer, util
-from openai import OpenAI
+import openai
 import json
 import requests
 import tempfile
 from difflib import get_close_matches
 import re
 from datetime import timedelta
-import matplotlib.pyplot as plt
-from docx import Document
-from docx.shared import Pt
 from pandas import Timestamp
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from dotenv import load_dotenv
 
 st.set_page_config(layout = 'wide')
+
+load_dotenv()
 
 st.write("Hoje:", pd.Timestamp.today())
 
@@ -41,29 +52,43 @@ admin_users = ["cvieira", "amendonca", "mathayde"]
 cadastro_users = ["cvieira", "amendonca", "mathayde"]
 chat_users = ["cvieira", "amendonca", "mathayde","bromanelli","ysouza"]
 
+email_user = os.getenv("EMAIL_USER")
+email_pass = os.getenv("EMAIL_PASS")
+
 hoje = Timestamp.today().normalize()
 
-def enviar_email_gmail(destinatario, assunto, corpo_html):
+def enviar_email_outlook(destinatario, assunto, corpo_html):
     try:
-        yag = yagmail.SMTP(user=st.secrets["email_user"], password=st.secrets["email_pass"])
-        yag.send(to=destinatario, subject=assunto, contents=corpo_html)
+        email_user = os.getenv("EMAIL_USER")
+        email_pass = os.getenv("EMAIL_PASS")
+
+        msg = MIMEMultipart("alternative")
+        msg["From"] = email_user
+        msg["To"] = ", ".join(destinatario) if isinstance(destinatario, list) else destinatario
+        msg["Subject"] = assunto
+
+        parte_html = MIMEText(corpo_html, "html")
+        msg.attach(parte_html)
+
+        with smtplib.SMTP("10.40.0.106", 587) as servidor:
+            servidor.sendmail(email_user, destinatario, msg.as_string())
+
         return True
+
     except Exception as e:
         st.error(f"Erro ao enviar e-mail: {e}")
         return False
     
 def conectar_drive():
-    cred_dict = st.secrets["credentials"]
-
     credentials = OAuth2Credentials(
-        access_token=cred_dict["access_token"],
-        client_id=cred_dict["client_id"],
-        client_secret=cred_dict["client_secret"],
-        refresh_token=cred_dict["refresh_token"],
-        token_expiry=datetime.strptime(cred_dict["token_expiry"], "%Y-%m-%dT%H:%M:%SZ"),
-        token_uri=cred_dict["token_uri"],
+        access_token=os.getenv("ACCESS_TOKEN"),
+        client_id=os.getenv("CLIENT_ID"),
+        client_secret=os.getenv("CLIENT_SECRET"),
+        refresh_token=os.getenv("REFRESH_TOKEN"),
+        token_expiry=datetime.strptime(os.getenv("TOKEN_EXPIRY"), "%Y-%m-%dT%H:%M:%SZ"),
+        token_uri=os.getenv("TOKEN_URI"),
         user_agent="streamlit-app/1.0",
-        revoke_uri=cred_dict["revoke_uri"]
+        revoke_uri=os.getenv("REVOKE_URI")
     )
 
     # Atualiza token se expirado
@@ -200,12 +225,14 @@ def upload_evidencias_para_drive(idx, arquivos, observacao):
                 arquivo_drive.Upload()
 
         # 📝 Observação
-        if observacao.strip():
+        obs_linhas = [linha.strip() for linha in observacao.strip().split("\n\n") if linha.strip()]
+        for i, linha_obs in enumerate(obs_linhas):
+            nome_obs = "observacao.txt" if i == 0 else f"observacao_{i+1}.txt"
             obs_file = drive.CreateFile({
-                'title': 'observacao.txt',
+                'title': nome_obs,
                 'parents': [{'id': subpasta['id']}]
             })
-            obs_file.SetContentString(observacao.strip())
+            obs_file.SetContentString(linha_obs)
             obs_file.Upload()
 
         st.success("✅ Evidências enviadas ao Google Drive com sucesso.")
@@ -293,15 +320,14 @@ def aplicar_filtros_df(df, pergunta):
 # --- Usuários e autenticação simples ---
 @st.cache_data
 def carregar_usuarios():
-    usuarios_config = st.secrets.get("users", {})
-    usuarios = {}
-    for user, dados in usuarios_config.items():
-        try:
-            nome, senha = dados.split("|", 1)
-            usuarios[user] = {"name": nome, "password": senha}
-        except:
-            st.warning(f"Erro ao carregar usuário '{user}' nos secrets.")
-    return usuarios
+    users = {}
+    for k, v in os.environ.items():
+        if "|" in v:
+            valor_limpo = v.strip().replace('"', '')
+            partes = valor_limpo.split("|")
+            if len(partes) == 2:
+                users[k.lower()] = {"name": partes[0].strip(), "password": partes[1].strip()}
+    return users
 
 users = carregar_usuarios()
 
@@ -311,7 +337,7 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     st.title("🔐 Login")
-    username = st.text_input("Usuário")
+    username = st.text_input("Usuário").strip().lower()
     password = st.text_input("Senha", type="password")
     if st.button("Entrar"):
         user = users.get(username)
@@ -406,7 +432,7 @@ if menu == "Dashboard":
         elif filtro_vencidos == 'No Prazo':
             df = df[df['Prazo']>= hoje]
 
-        if 'Todas' not in lista_auditorias:
+        if 'Todas' not in filtro_auditoria:
             df = df[df['Auditoria'].isin(filtro_auditoria)]
             
         # --- KPIs principais ---
@@ -564,7 +590,11 @@ elif menu == "Meus Follow-ups":
                 novo_valor = st.date_input(f"Novo valor para '{coluna_escolhida}':", value=data_inicial)
                 novo_valor_str = novo_valor.strftime("%Y-%m-%d")
             else:
-                novo_valor = st.text_input(f"Valor atual de '{coluna_escolhida}':", value=str(valor_atual))
+                if isinstance(valor_atual, str) and len(valor_atual) > 100:
+                    novo_valor = st.text_area(f"Valor atual de '{coluna_escolhida}':", value=valor_atual, height=150)
+                else:
+                    novo_valor = st.text_input(f"Valor atual de '{coluna_escolhida}':", value=str(valor_atual))
+                    
                 novo_valor_str = novo_valor.strip()
 
             if st.button("💾 Atualizar campo"):
@@ -688,24 +718,24 @@ elif menu == "Cadastrar Follow-up":
                 st.success("✅ Follow-up salvo e sincronizado com o Drive!")
     
                 corpo = f"""
-                <p>Olá <b>{responsavel}</b>,</p>
-                <p>Um novo follow-up foi atribuído a você:</p>
-                <ul>
-                    <li><b>Título:</b> {titulo}</li>
-                    <li><b>Auditoria:</b> {auditoria}</li>
-                    <li><b>Apontamento:</b> {apontamento}</li>
-                    <li><b>Plano de Acao:</b> {plano}</li>
-                    <li><b>Prazo:</b> {prazo.strftime('%d/%m/%Y')}</li>
-                    <li><b>Status:</b> {status}</li>
-                </ul>
-                <p>Acesse o aplicativo para incluir evidências e acompanhar o andamento:</p>
-                <p><a href='https://fup-auditoria.streamlit.app/' target='_blank'>🔗 fup-auditoria.streamlit.app</a></p>
-                <br>
-                <p>Atenciosamente,<br>Auditoria Interna</p>
-                """
+                    <p>Olá <b>{responsavel}</b>,</p>
+                    <p>Um novo follow-up foi atribuído a você:</p>
+                    <ul>
+                        <li><b>Título:</b> {titulo}</li>
+                        <li><b>Auditoria:</b> {auditoria}</li>
+                        <li><b>Apontamento:</b> {apontamento}</li>
+                        <li><b>Plano de Acao:</b> {plano}</li>
+                        <li><b>Prazo:</b> {prazo.strftime('%d/%m/%Y')}</li>
+                        <li><b>Status:</b> {status}</li>
+                    </ul>
+                    <p>Acesse o aplicativo para incluir evidências e acompanhar o andamento:</p>
+                    <p><a href='http://10.40.12.13:8502/' target='_blank'>🔗 Acessar Follow-ups da Auditoria Interna</a></p>
+                    <br>
+                    <p>Atenciosamente,<br>Time de Auditoria Interna.</p>
+                    """
     
                 if email:
-                    sucesso_envio = enviar_email_gmail(
+                    sucesso_envio = enviar_email_outlook(
                         destinatario=email,
                         assunto=f"[Follow-up] Nova Atribuição: {titulo}",
                         corpo_html=corpo
@@ -814,7 +844,7 @@ elif menu == "Enviar Evidências":
 
                 destinatarios_evidencias = ["cvieira@prio3.com.br","mathayde@prio3.com.br","amendonca@prio3.com.br"]
                 
-                sucesso_envio = enviar_email_gmail(
+                sucesso_envio = enviar_email_outlook(
                     destinatario=destinatarios_evidencias,
                     assunto=f"[Evidência] Follow-up #{idx} - {linha['Titulo']}",
                     corpo_html=corpo
@@ -889,24 +919,57 @@ elif menu == "Visualizar Evidências":
             st.info("Nenhum arquivo nesta pasta.")
             st.stop()
 
-        buffer_zip = BytesIO()
-        with zipfile.ZipFile(buffer_zip, "w") as zipf:
-            for arq in arquivos:
-                nome = arq['title']
-                if nome.lower() == "observacao.txt":
-                    conteudo = arq.GetContentString()
-                    st.markdown("**📝 Observação:**")
-                    st.info(conteudo)
-                    zipf.writestr(nome, conteudo)
-                else:
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                        arq.GetContentFile(tmp_file.name)
-                        tmp_file.seek(0)
-                        zipf.write(tmp_file.name, arcname=nome)
-                        link = arq['alternateLink']
-                        st.markdown(f"📎 [{nome}]({link})", unsafe_allow_html=True)
+        arquivos_ordenados = sorted(arquivos, key=lambda x: x['title'])
 
+        buffer_zip = BytesIO()
+        zipf = zipfile.ZipFile(buffer_zip, "w")
+
+        count = 0
+        for arq in arquivos_ordenados:
+            nome = arq['title']
+            if nome.lower().startswith("observacao"):
+                continue
+
+            count += 1
+            obs_nome = "observacao.txt" if count == 1 else f"observacao_{count}.txt"
+            observacao = ""
+            obs_arqs = [a for a in arquivos_ordenados if a['title'] == obs_nome]
+            if obs_arqs:
+                observacao = obs_arqs[0].GetContentString()
+
+            st.markdown("**📎 Evidência:**")
+            st.markdown(f"[{nome}]({arq['alternateLink']})", unsafe_allow_html=True)
+            st.markdown("**📝 Observação:**")
+            nova_obs = st.text_area(f"Editar observação {count}", value=observacao, key=f"obs_edit_{count}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(f"💾 Salvar observação {count}", key=f"save_obs_{count}"):
+                    obs_file = drive.CreateFile({'title': obs_nome, 'parents': [{'id': pasta_selecionada_id}]})
+                    obs_file.SetContentString(nova_obs.strip())
+                    obs_file.Upload()
+                    st.success(f"Observação {count} salva com sucesso.")
+                    st.rerun()
+
+            with col2:
+                if st.button(f"🗑️ Excluir esta evidência", key=f"del_{count}"):
+                    arq.Delete()
+                    if obs_arqs:
+                        obs_arqs[0].Delete()
+                    st.warning(f"Evidência {nome} excluída.")
+                    st.rerun()
+
+            # Adiciona ao .zip
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                arq.GetContentFile(tmp_file.name)
+                tmp_file.seek(0)
+                zipf.write(tmp_file.name, arcname=nome)
+            if observacao:
+                zipf.writestr(obs_nome, observacao)
+
+        zipf.close()
         buffer_zip.seek(0)
+
         st.download_button(
             label="📦 Baixar todos como .zip",
             data=buffer_zip,
@@ -915,7 +978,7 @@ elif menu == "Visualizar Evidências":
         )
 
         if usuario_logado in admin_users:
-            if st.button("🗑️ Excluir todas as evidências deste índice"):
+            if st.button("🧹 Excluir todas as evidências deste índice"):
                 try:
                     pasta_obj.Delete()
                     st.success(f"Evidências do índice {indice_escolhido} excluídas com sucesso.")
@@ -1117,7 +1180,7 @@ def enviar_emails_followups_vencidos():
     hoje = pd.Timestamp.today().normalize()
 
     df_vencidos = df[
-        (df["Status"].str.lower() != "concluído") &
+        (df["Status"].str.lower() != "concluído") & 
         (df["Prazo"] < hoje)
     ]
 
@@ -1125,8 +1188,11 @@ def enviar_emails_followups_vencidos():
         st.info("✅ Nenhum follow-up vencido identificado para envio.")
         return
 
-    # Agrupar por responsável
     responsaveis = df_vencidos["E-mail"].dropna().unique().tolist()
+    lista_cc = ["cvieira@prio3.com.br", "mathayde@prio3.com.br", "amendonca@prio3.com.br"]
+
+    email_user = os.getenv("EMAIL_USER")
+    email_pass = os.getenv("EMAIL_PASS")
 
     for email in responsaveis:
         df_resp = df_vencidos[df_vencidos["E-mail"] == email]
@@ -1134,29 +1200,52 @@ def enviar_emails_followups_vencidos():
         if df_resp.empty:
             continue
 
-        corpo = f"""
+        corpo_html = """
         <p>Olá,</p>
         <p>Você possui os seguintes follow-ups vencidos:</p>
         <table border='1' cellpadding='4' cellspacing='0'>
-            <tr><th>Título</th><th>Auditoria</th><th>Plano de Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th></tr>
+            <tr>
+                <th>Título</th><th>Auditoria</th><th>Plano de Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th>
+            </tr>
         """
 
         for _, row in df_resp.iterrows():
-            corpo += f"<tr><td>{row['Titulo']}</td><td>{row['Auditoria']}</td><td>{row['Plano de Acao']}</td><td>{row['Responsavel']}</td><td>{row['Prazo'].date()}</td><td>{row['Status']}</td></tr>"
+            corpo_html += f"""
+            <tr>
+                <td>{row['Titulo']}</td>
+                <td>{row['Auditoria']}</td>
+                <td>{row['Plano de Acao']}</td>
+                <td>{row['Responsavel']}</td>
+                <td>{row['Prazo'].date()}</td>
+                <td>{row['Status']}</td>
+            </tr>
+            """
 
-        corpo += """
+        corpo_html += """
         </table>
         <p>Por favor, atualize os registros no sistema ou entre em contato com a Auditoria Interna.</p>
         <p>Acesse o aplicativo para incluir evidências e acompanhar o andamento:</p>
-        <p><a href='https://fup-auditoria.streamlit.app/' target='_blank'>🔗 fup-auditoria.streamlit.app</a></p>
+        <p><a href='http://10.40.12.13:8502/' target='_blank'>🔗 Acessar Follow-ups da Auditoria Interna</a></p>
         <br>
-        <p>Atenciosamente,<br>Time de Auditoria</p>
+        <p>Atenciosamente,<br>Time de Auditoria Interna.</p>
         """
 
         try:
-            yag = yagmail.SMTP(user=st.secrets["email_user"], password=st.secrets["email_pass"])
-            yag.send(to=email, subject="📌 Follow-ups vencidos - Auditoria Interna", contents=corpo)
+            msg = MIMEMultipart("alternative")
+            msg["From"] = email_user
+            msg["To"] = email
+            msg["Cc"] = ", ".join(lista_cc)
+            msg["Subject"] = "📌 Follow-ups vencidos - Auditoria Interna"
+
+            msg.attach(MIMEText(corpo_html, "html"))
+            
+            todos_destinatarios = [email] + lista_cc
+            
+            with smtplib.SMTP("10.40.0.106", 587) as servidor:
+                servidor.sendmail(email_user, todos_destinatarios, msg.as_string())
+        
             st.success(f"📧 E-mail enviado para: {email}")
+
         except Exception as e:
             st.warning(f"Erro ao enviar para {email}: {e}")
 
@@ -1171,7 +1260,7 @@ def enviar_emails_followups_a_vencer():
     df.columns = df.columns.str.strip()
     df["Prazo"] = pd.to_datetime(df["Prazo"], errors="coerce")
 
-    hoje = pd.Timestamp.today()
+    hoje = pd.Timestamp.today().normalize()
     limite = hoje + timedelta(days=30)
 
     df_a_vencer = df[
@@ -1185,13 +1274,17 @@ def enviar_emails_followups_a_vencer():
         return
 
     responsaveis = df_a_vencer["E-mail"].dropna().unique().tolist()
+    lista_cc = ["cvieira@prio3.com.br", "mathayde@prio3.com.br", "amendonca@prio3.com.br"]
+
+    email_user = os.getenv("EMAIL_USER")
+    email_pass = os.getenv("EMAIL_PASS")
 
     for email in responsaveis:
         df_resp = df_a_vencer[df_a_vencer["E-mail"] == email]
         if df_resp.empty:
             continue
 
-        corpo = f"""
+        corpo_html = """
         <p>Olá,</p>
         <p>Você possui os seguintes follow-ups com prazo a vencer em até 30 dias:</p>
         <table border='1' cellpadding='4' cellspacing='0'>
@@ -1199,20 +1292,44 @@ def enviar_emails_followups_a_vencer():
         """
 
         for _, row in df_resp.iterrows():
-            corpo += f"<tr><td>{row['Titulo']}</td><td>{row['Auditoria']}</td><td>{row['Plano de Acao']}</td><td>{row['Responsavel']}</td><td>{row['Prazo'].date()}</td><td>{row['Status']}</td></tr>"
+            corpo_html += f"""
+            <tr>
+                <td>{row['Titulo']}</td>
+                <td>{row['Auditoria']}</td>
+                <td>{row['Plano de Acao']}</td>
+                <td>{row['Responsavel']}</td>
+                <td>{row['Prazo'].date()}</td>
+                <td>{row['Status']}</td>
+            </tr>
+            """
 
-        corpo += """
+        corpo_html += """
         </table>
         <p>Por favor, antecipe ações necessárias e atualize o status no sistema.</p>
         <p>Acesse o aplicativo para mais detalhes:</p>
-        <p><a href='https://fup-auditoria.streamlit.app/' target='_blank'>🔗 fup-auditoria.streamlit.app</a></p>
+        <p><a href='http://10.40.12.13:8502/' target='_blank'>🔗 Acessar Follow-ups da Auditoria Interna</a></p>
         <br>
-        <p>Atenciosamente,<br>Time de Auditoria</p>
+        <p>Atenciosamente,<br>Time de Auditoria Interna.</p>
         """
 
-        sucesso = enviar_email_gmail(destinatario=email, assunto="⏳ Follow-ups próximos do vencimento", corpo_html=corpo)
-        if sucesso:
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["From"] = email_user
+            msg["To"] = email
+            msg["Cc"] = ", ".join(lista_cc)
+            msg["Subject"] = "⏳ Follow-ups próximos do vencimento"
+
+            msg.attach(MIMEText(corpo_html, "html"))
+            
+            todos_destinatarios = [email] + lista_cc
+            
+            with smtplib.SMTP("10.40.0.106", 587) as servidor:
+                servidor.sendmail(email_user, todos_destinatarios, msg.as_string())
+
             st.success(f"📧 E-mail enviado para: {email}")
+
+        except Exception as e:
+            st.warning(f"Erro ao enviar para {email}: {e}")
 
 if st.session_state.username in admin_users:
     if st.sidebar.button("📅 Enviar lembrete de follow-ups a vencer"):
