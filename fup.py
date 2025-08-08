@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Aug  4 07:43:41 2025
+
+@author: cvieira
+"""
+
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
@@ -257,8 +265,8 @@ def carregar_followups():
     }).GetList()
 
     colunas = [
-        "Titulo", "Ambiente", "Ano", "Auditoria", "Apontamento", "Risco",
-        "Plano de Acao", "Responsavel", "Usuario", "E-mail",
+        "Titulo", "Ambiente", "Ano", "Auditoria", "Apontamento", "Impacto","Recomendacao",
+        "Observacao","Riscos","Plano de Acao", "Responsavel", "Usuario", "E-mail",
         "Prazo", "Data de Conclusão", "Status", "Avaliação FUP", "Observação"
     ]
 
@@ -442,12 +450,19 @@ if menu == "Dashboard":
         col5.metric("Conclusão (%)", f"{taxa_conclusao}%")
     
         # --- Gráficos ---
+        mapa_de_cores = {
+            'Concluído': '#5A8B73',    
+            'Em Andamento': '#4F77AA',  
+            'Pendente': '#B4656F'
+        }
+        
         st.subheader("📌 Distribuição por Status")
         fig_status = px.pie(
             df,
             names="Status",
             title="Distribuição dos Follow-ups por Status",
-            hole=0.4
+            hole=0.4,
+            color_discrete_map=mapa_de_cores
         )
         st.plotly_chart(fig_status, use_container_width=True)
     
@@ -553,8 +568,16 @@ elif menu == "Meus Follow-ups":
 
         if not df.empty:
             df["Ambiente"] = df["Ambiente"].str.lower()
-            st.dataframe(df, use_container_width=True)
-            st.success(f"Total Follow Ups: {len(df)}")
+            df_app = df.copy()
+            df_app = df_app.rename(columns={
+                "Observacao":"Observação",
+                "Recomendacao":"Recomendação",
+                "Plano de Acao": "Plano de Ação",
+                "Responsavel": "Responsável",
+                "Usuario": "Usuário"
+                })
+            st.dataframe(df_app, use_container_width=True)
+            st.success(f"Total Follow Ups: {len(df_app)}")
 
             st.subheader("🛠️ Atualizar / Excluir Follow-up por Índice")
 
@@ -581,11 +604,13 @@ elif menu == "Meus Follow-ups":
                     data_inicial = date.today()
                 novo_valor = st.date_input(f"Novo valor para '{coluna_escolhida}':", value=data_inicial)
                 novo_valor_str = novo_valor.strftime("%Y-%m-%d")
+            elif coluna_escolhida in ["Status"]:
+                novo_valor = st.selectbox("Status", ["Pendente", "Em Andamento", "Concluído"])                
             else:
                 if isinstance(valor_atual, str) and len(valor_atual) > 100:
                     novo_valor = st.text_area(f"Valor atual de '{coluna_escolhida}':", value=valor_atual, height=150)
                 else:
-                    novo_valor = st.text_input(f"Valor atual de '{coluna_escolhida}':", value=str(valor_atual))
+                    novo_valor = st.text_area(f"Valor atual de '{coluna_escolhida}':", value=str(valor_atual))
                     
                 novo_valor_str = novo_valor.strip()
 
@@ -653,7 +678,10 @@ elif menu == "Cadastrar Follow-up":
             ano = st.selectbox("Ano", list(range(2020, date.today().year + 2)))
             auditoria = st.text_input("Auditoria")
             apontamento = st.text_input("Apontamento")
-            risco = st.selectbox("Risco", ["Baixo", "Médio", "Alto"])
+            impacto = st.selectbox("Impacto", ["Baixo", "Moderado", "Alto", "Crítico"])
+            observacao = st.text_area("Observação")
+            recomendacao = st.text_area("Recomendação")
+            riscos = st.text_area("Riscos")
             plano = st.text_area("Plano de Ação")
             responsavel = st.text_input("Responsável")
             usuario = st.text_input("Usuário")
@@ -662,7 +690,7 @@ elif menu == "Cadastrar Follow-up":
             data_conclusao = st.date_input("Data de Conclusão", value=date.today())
             status = st.selectbox("Status", ["Pendente", "Em Andamento", "Concluído"])
             avaliacao = st.selectbox("Avaliação FUP", ["", "Satisfatório", "Insatisfatório"])
-            observacao = st.text_area("Observação")
+            observacao2 = st.text_area("Observação FUP")
     
             submitted = st.form_submit_button("Salvar Follow-up")
     
@@ -673,7 +701,10 @@ elif menu == "Cadastrar Follow-up":
                 "Ano": ano,
                 "Auditoria": auditoria,
                 "Apontamento": apontamento,
-                "Risco": risco,
+                "Impacto": impacto,
+                "Observação": observacao,
+                "Recomendacao": recomendacao,
+                "Riscos": riscos,
                 "Plano de Acao": plano,
                 "Responsavel": responsavel,
                 "Usuario": usuario,
@@ -682,7 +713,7 @@ elif menu == "Cadastrar Follow-up":
                 "Data de Conclusão": data_conclusao.strftime("%Y-%m-%d"),
                 "Status": status,
                 "Avaliação FUP": avaliacao,
-                "Observação": observacao
+                "Observação": observacao2
             }
     
             try:
